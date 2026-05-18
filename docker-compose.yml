@@ -1,0 +1,38 @@
+services:
+  ipsec-oauth:
+    build: .
+    restart: unless-stopped
+    privileged: true          # нужен для xfrm, iptables, ip route
+    network_mode: host        # IKE UDP 500/4500 должны быть на хосте напрямую
+
+    environment:
+      # ── OAuth2 / Authentik ──────────────────────────────────────────
+      OAUTH_PROVIDER_URL: "https://auth-a.rhost.io/application/o/gw-rhost-io"
+      OAUTH_CLIENT_ID: "your-client-id"
+      OAUTH_CLIENT_SECRET: "your-client-secret"
+      OAUTH_REDIRECT_URL: "http://10.171.120.253:8080/callback"
+
+      # ── App ─────────────────────────────────────────────────────────
+      LISTEN_ADDR: ":8080"
+      VPN_HOST: "gw.rhost.io"
+
+      # Маршруты по умолчанию (split tunnel). Пусто = не управлять маршрутами.
+      DEFAULT_ROUTES: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+
+      IPSEC_SECRETS_PATH: "/etc/ipsec.secrets"
+      REVALIDATION_INTERVAL: "5m"
+
+      # ── strongSwan ──────────────────────────────────────────────────
+      STRONGSWAN_CMD: "ipsec"
+      STRONGSWAN_ARGS: "start"
+
+    volumes:
+      # Конфиги strongSwan с хоста (read-only — мы их не меняем)
+      - /etc/ipsec.conf:/etc/ipsec.conf:ro
+      - /etc/ipsec.d:/etc/ipsec.d:ro
+
+      # ipsec.secrets — read-write, наше приложение пишет сюда
+      - /etc/ipsec.secrets:/etc/ipsec.secrets
+
+      # Часовой пояс хоста
+      - /etc/localtime:/etc/localtime:ro
