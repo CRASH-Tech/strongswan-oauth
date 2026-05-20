@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -18,20 +17,10 @@ import (
 func main() {
 	cfg := loadConfig()
 
-	// Ensure ipsec.secrets exists with the RSA key header
 	if err := ipsec.EnsureSecretsFile(cfg.IPSecSecretsPath); err != nil {
-		log.Fatalf("Failed to initialize ipsec.secrets: %v", err)
+		log.Fatalf("Failed to initialize secrets file: %v", err)
 	}
-	log.Printf("ipsec.secrets ready at %s", cfg.IPSecSecretsPath)
-
-	// Write default routes file
-	if cfg.DefaultRoutes != "" {
-		if err := ipsec.WriteDefaultRoutes(cfg.DefaultRoutes); err != nil {
-			log.Printf("Warning: could not write default routes: %v", err)
-		} else {
-			log.Printf("Default routes: %s", cfg.DefaultRoutes)
-		}
-	}
+	log.Printf("Secrets file ready at %s", cfg.IPSecSecretsPath)
 
 	ipsecManager := ipsec.NewManager(cfg.IPSecSecretsPath)
 
@@ -48,20 +37,12 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Start strongSwan supervisor
 	daemonCfg := cfg.daemonConfig()
 	go ipsec.RunDaemon(ctx, daemonCfg)
 
-	// Watch TLS cert/key and reload strongSwan when they change
-	if cfg.TLSCertPath != "" && cfg.TLSKeyPath != "" {
-		reloader := ipsec.NewCertReloader(cfg.TLSCertPath, cfg.TLSKeyPath, cfg.CertReloadInterval)
-		go reloader.Run(ctx)
-	}
-
-	// Background token revalidation
 	go ipsecManager.StartTokenRevalidation(ctx, oauthProvider, cfg.RevalidationInterval)
 
-	handler := web.NewHandler(oauthProvider, ipsecManager, cfg.VPNHost, cfg.DefaultRoutes)
+	handler := web.NewHandler(oauthProvider, ipsecManager, cfg.VPNHost, cfg.AdditionalServers, cfg.RemoteIDs)
 
 	srv := &http.Server{
 		Addr:         cfg.ListenAddr,
@@ -100,35 +81,25 @@ type Config struct {
 	ProviderURL  string
 
 	// Web
-	ListenAddr string
-	VPNHost    string
+	ListenAddr        string
+	VPNHost           string
+	AdditionalServers string // comma-separated list of additional VPN server addresses
+	RemoteIDs         string // comma-separated list of IKEv2 Remote IDs shown to the user
 
 	// IPSec
 	IPSecSecretsPath     string
-	DefaultRoutes        string
 	RevalidationInterval time.Duration
 
 	// strongSwan daemon
 	StrongSwanCmd  string
-	StrongSwanArgs []string
 
-	// TLS cert watcher
-	TLSCertPath        string
-	TLSKeyPath         string
-	CertReloadInterval time.Duration
 }
 
 func (c Config) daemonConfig() ipsec.DaemonConfig {
-	if c.StrongSwanCmd == "" {
-		return ipsec.DaemonConfig{}
-	}
 	return ipsec.DaemonConfig{
-		StartCmd:     c.StrongSwanCmd,
-		StartArgs:    c.StrongSwanArgs,
-		StopCmd:      c.StrongSwanCmd,
-		StopArgs:     []string{"stop"},
+		Cmd:          c.StrongSwanCmd,
 		RestartDelay: 3 * time.Second,
-		PidFile:      "/var/run/charon.pid",
+		StartupDelay: 2 * time.Second,
 	}
 }
 
@@ -156,13 +127,10 @@ func loadConfig() Config {
 		ProviderURL:          getEnv("OAUTH_PROVIDER_URL", ""),
 		ListenAddr:           getEnv("LISTEN_ADDR", ":8080"),
 		VPNHost:              getEnv("VPN_HOST", ""),
-		DefaultRoutes:        getEnv("DEFAULT_ROUTES", ""),
-		IPSecSecretsPath:     getEnv("IPSEC_SECRETS_PATH", "/etc/ipsec/ipsec.secrets"),
+		AdditionalServers:    getEnv("VPN_ADDITIONAL_SERVERS", ""),
+		RemoteIDs:            getEnv("VPN_REMOTE_IDS", ""),
+		IPSecSecretsPath:     getEnv("IPSEC_SECRETS_PATH", "/etc/ipsec/swanctl-eap.conf"),
 		RevalidationInterval: parseDuration("REVALIDATION_INTERVAL", "5m"),
-		StrongSwanCmd:        getEnv("STRONGSWAN_CMD", "ipsec"),
-		StrongSwanArgs:       strings.Fields(getEnv("STRONGSWAN_ARGS", "start")),
-		TLSCertPath:          getEnv("TLS_CERT_PATH", "/etc/ipsec.d/certs/tls.crt"),
-		TLSKeyPath:           getEnv("TLS_KEY_PATH", "/etc/ipsec.d/private/tls.key"),
-		CertReloadInterval:   parseDuration("CERT_RELOAD_INTERVAL", "1m"),
+		StrongSwanCmd:        getEnv("STRONGSWAN_CMD", "/usr/lib/ipsec/charon"),
 	}
 }

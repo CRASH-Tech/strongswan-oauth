@@ -7,31 +7,31 @@ services:
 
     environment:
       # ── OAuth2 / Authentik ──────────────────────────────────────────
-      OAUTH_PROVIDER_URL: "https://auth-a.rhost.io/application/o/gw-rhost-io"
+      OAUTH_PROVIDER_URL: "https://auth-a.example.com/application/o/example"
       OAUTH_CLIENT_ID: "your-client-id"
       OAUTH_CLIENT_SECRET: "your-client-secret"
       OAUTH_REDIRECT_URL: "http://10.171.120.253:8080/callback"
 
       # ── App ─────────────────────────────────────────────────────────
       LISTEN_ADDR: ":8080"
-      VPN_HOST: "gw.rhost.io"
+      VPN_HOST: "gw.examplr.com"
+      VPN_ADDITIONAL_SERVERS: ""
+      VPN_REMOTE_IDS: ""
 
       # Маршруты по умолчанию (split tunnel). Пусто = не управлять маршрутами.
-      DEFAULT_ROUTES: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
 
-      IPSEC_SECRETS_PATH: "/etc/ipsec.secrets"
+      IPSEC_SECRETS_PATH: "/etc/ipsec/swanctl-eap.conf"
       REVALIDATION_INTERVAL: "5m"
 
       # ── strongSwan ──────────────────────────────────────────────────
-      STRONGSWAN_CMD: "ipsec"
-      STRONGSWAN_ARGS: "start"
+      STRONGSWAN_CMD: "/usr/sbin/charon-systemd"
 
     volumes:
       # Конфиги strongSwan с хоста (read-only — мы их не меняем)
       - /etc/ipsec.conf:/etc/ipsec.conf:ro
       - /etc/ipsec.d:/etc/ipsec.d:ro
 
-      # ipsec.secrets — read-write, наше приложение пишет сюда
+      # swanctl-eap.conf — read-write, наше приложение пишет сюда
       - /etc/ipsec.secrets:/etc/ipsec.secrets
 
       # Часовой пояс хоста

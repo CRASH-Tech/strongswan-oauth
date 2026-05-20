@@ -11,12 +11,9 @@ strongswan-oauth/
 ├── internal/
 │   ├── auth/provider.go               # OIDC discovery + token exchange + introspection
 │   ├── ipsec/
-│   │   ├── manager.go                 # ipsec.secrets read/write + token revalidation
-│   │   ├── secrets.go                 # Ensures ipsec.secrets exists with RSA header
-│   │   ├── certreload.go              # Watches tls.crt/tls.key, reloads strongSwan
-│   │   ├── daemon.go                  # strongSwan process supervisor
-│   │   ├── routes.go                  # Per-user route files for updown script
-│   │   └── updown.sh                  # Called by strongSwan on connect/disconnect
+│   │   ├── manager.go                 # swanctl-eap.conf read/write + token revalidation
+│   │   ├── secrets.go                 # Ensures swanctl-eap.conf exists
+│   │   └── daemon.go                  # strongSwan process supervisor
 │   └── web/handler.go                 # HTTP: login → confirm → token page
 ├── Dockerfile
 └── chart/strongswan-oauth/            # Helm chart
@@ -27,7 +24,7 @@ strongswan-oauth/
         ├── service-web.yaml           # ClusterIP → Ingress
         ├── service-ike.yaml           # NodePort/LB UDP 500+4500
         ├── ingress.yaml
-        ├── configmap.yaml             # ipsec.conf
+        ├── configmap.yaml             # swanctl.conf
         ├── secret.yaml                # OAuth credentials
         └── pvc.yaml                   # /etc/ipsec (ipsec.secrets)
 ```
@@ -73,48 +70,23 @@ helm install strongswan chart/strongswan-oauth -f my-values.yaml
 
 ---
 
-## Certificate management
+## swanctl-eap.conf
 
-Certificates are mounted from a `kubernetes.io/tls` Secret into:
+Stored on a PVC at `/etc/ipsec/swanctl-eap.conf` and included by `/etc/swanctl/swanctl.conf`.  
+The app manages this file — do not edit it manually. Example content:
 
-| File | Path in container |
-|------|-------------------|
-| `tls.crt` | `/etc/ipsec.d/certs/tls.crt` |
-| `tls.key` | `/etc/ipsec.d/private/tls.key` |
-
-The app polls these files every `CERT_RELOAD_INTERVAL` (default `1m`).  
-When the SHA-256 hash changes (cert-manager renewed the cert), it runs:
-
-```
-ipsec rereadcacerts
-ipsec rereadcerts
-ipsec rereadsecrets
+```hcl
+secrets {
+  eap-alice {
+    id = alice
+    secret = "Kj3mPqR8vNxL"
+    # expires=2025-01-01T00:00:00Z accessToken=<jwt> user=alice managed-by=ipsec-oauth
+  }
+}
 ```
 
-No pod restart needed.
-
----
-
-## ipsec.secrets
-
-Stored on a PVC at `/etc/ipsec/ipsec.secrets`.  
-On startup the app ensures the file contains the RSA server key line:
-
-```
-: RSA /etc/ipsec.d/private/tls.key
-
-%any alice : EAP "Kj3mPqR8vNxL" # expires=... user=alice managed-by=strongswan-oauth
-```
-
----
-
-## Routing (updown script)
-
-On client connect, strongSwan calls `/etc/ipsec-oauth/updown.sh`.  
-Routes applied via `ip route add <subnet> via <client-virtual-ip>`:
-
-- **Split tunnel** → routes from `/etc/ipsec-oauth/default_routes` (set by `DEFAULT_ROUTES`)
-- **Full tunnel** → `0.0.0.0/0` (user selected at login)
+`swanctl --load-creds` is called automatically after every write and on every revalidation tick,
+so renewed TLS certificates are also picked up without restarting connections.
 
 ---
 
@@ -126,12 +98,10 @@ Routes applied via `ip route add <subnet> via <client-virtual-ip>`:
 | `OAUTH_CLIENT_ID` | — | Authentik client ID |
 | `OAUTH_CLIENT_SECRET` | — | Authentik client secret |
 | `OAUTH_REDIRECT_URL` | — | OAuth callback URL |
-| `VPN_HOST` | — | Hostname shown to users |
-| `DEFAULT_ROUTES` | — | Comma-separated CIDRs for split tunnel |
+| `VPN_HOST` | — | Primary VPN hostname shown to users |
+| `VPN_ADDITIONAL_SERVERS` | — | Comma-separated list of additional VPN server addresses |
+| `VPN_REMOTE_IDS` | — | Comma-separated list of IKEv2 Remote IDs shown to users |
 | `IPSEC_SECRETS_PATH` | `/etc/ipsec/ipsec.secrets` | Path on PVC |
 | `REVALIDATION_INTERVAL` | `5m` | Token introspection interval |
-| `TLS_CERT_PATH` | `/etc/ipsec.d/certs/tls.crt` | Certificate path |
-| `TLS_KEY_PATH` | `/etc/ipsec.d/private/tls.key` | Private key path |
-| `CERT_RELOAD_INTERVAL` | `1m` | How often to check for cert changes |
 | `STRONGSWAN_CMD` | `ipsec` | Set to empty to disable daemon management |
 | `STRONGSWAN_ARGS` | `start` | strongSwan start arguments |
